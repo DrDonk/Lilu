@@ -587,8 +587,8 @@ void BaseDeviceInfo::updateModelInfo() {
 	}
 
 	// Try the legacy approach for old MacEFI and VMware.
-	// Fall back to a default VMware model and board-id for whichever is missing.
-    // Setting them also terminates the retry loop.
+	// If a value cannot be found, fall back to a default VMware model and board-id.
+	// Setting them also terminates the retry loop.
 	while (modelIdentifier[0] == '\0' || boardIdentifier[0] == '\0') {
 		auto entry = IORegistryEntry::fromPath("/", gIODTPlane);
 		if (entry) {
@@ -606,8 +606,13 @@ void BaseDeviceInfo::updateModelInfo() {
 				} else {
 					DBGLOG("dev", "failed to get valid board-id from /");
 					SYSLOG("dev", "failed to obtain board-id information, using VMware default VMM-X86_64");
-                    lilu_strlcpy(boardIdentifier, "VMM-X86_64", sizeof(boardIdentifier));
-                    DBGLOG("dev", "defaulted board-id to %s", boardIdentifier);
+					lilu_strlcpy(boardIdentifier, "VMM-X86_64", sizeof(boardIdentifier));
+					// Without a real board-id the model in / is the ACPI one, so do not read it.
+					// Default the model as well, unless /efi/platform already gave us one.
+					if (modelIdentifier[0] == '\0') {
+						DBGLOG("dev", "using VMware default model VMware20,1");
+						lilu_strlcpy(modelIdentifier, "VMware20,1", sizeof(modelIdentifier));
+					}
 				}
 			} else {
 				modelReady = true;
@@ -618,22 +623,25 @@ void BaseDeviceInfo::updateModelInfo() {
 				if (data && data->getLength() > 0)
 					lilu_strlcpy(modelIdentifier, static_cast<const char *>(data->getBytesNoCopy()), sizeof(modelIdentifier));
 
-				if (modelIdentifier[0] != '\0')
+				if (modelIdentifier[0] != '\0') {
 					DBGLOG("dev", "got %s model from /", modelIdentifier);
-				else
+				} else {
 					DBGLOG("dev", "failed to get valid model from /");
-				    SYSLOG("dev", "failed to obtain model information, using VMware default VMware20,1");
-                    lilu_strlcpy(modelIdentifier, "VMware20,1", sizeof(modelIdentifier));
-                    DBGLOG("dev", "defaulted model to %s", modelIdentifier);
+					DBGLOG("dev", "failed to obtain model information, using VMware default VMware20,1");
+					lilu_strlcpy(modelIdentifier, "VMware20,1", sizeof(modelIdentifier));
+				}
 			}
-
-
 
 			entry->release();
 		} else {
-			SYSLOG("dev", "failed to get DT root");
+			DBGLOG("dev", "failed to get DT root, using VMware defaults");
+			if (boardIdentifier[0] == '\0')
+				lilu_strlcpy(boardIdentifier, "VMM-X86_64", sizeof(boardIdentifier));
+			if (modelIdentifier[0] == '\0')
+				lilu_strlcpy(modelIdentifier, "VMware20,1", sizeof(modelIdentifier));
 		}
 
+		// Only reachable if a default could not be applied; keep the original retry behaviour.
 		if (modelIdentifier[0] == '\0' || boardIdentifier[0] == '\0') {
 			SYSLOG("dev", "failed to obtain model information, retrying...");
 			IOSleep(1);
@@ -657,4 +665,3 @@ void BaseDeviceInfo::init() {
 	globalBaseDeviceInfo.updateFirmwareVendor();
 	globalBaseDeviceInfo.updateModelInfo();
 }
-
