@@ -587,6 +587,8 @@ void BaseDeviceInfo::updateModelInfo() {
 	}
 
 	// Try the legacy approach for old MacEFI and VMware.
+	// Fall back to a default VMware model and board-id for whichever is missing.
+    // Setting them also terminates the retry loop.
 	while (modelIdentifier[0] == '\0' || boardIdentifier[0] == '\0') {
 		auto entry = IORegistryEntry::fromPath("/", gIODTPlane);
 		if (entry) {
@@ -603,6 +605,9 @@ void BaseDeviceInfo::updateModelInfo() {
 					modelReady = true;
 				} else {
 					DBGLOG("dev", "failed to get valid board-id from /");
+					SYSLOG("dev", "failed to obtain board-id information, using VMware default VMM-X86_64");
+                    lilu_strlcpy(boardIdentifier, "VMM-X86_64", sizeof(boardIdentifier));
+                    DBGLOG("dev", "defaulted board-id to %s", boardIdentifier);
 				}
 			} else {
 				modelReady = true;
@@ -617,6 +622,9 @@ void BaseDeviceInfo::updateModelInfo() {
 					DBGLOG("dev", "got %s model from /", modelIdentifier);
 				else
 					DBGLOG("dev", "failed to get valid model from /");
+				    SYSLOG("dev", "failed to obtain model information, using VMware default VMware20,1");
+                    lilu_strlcpy(modelIdentifier, "VMware20,1", sizeof(modelIdentifier));
+                    DBGLOG("dev", "defaulted model to %s", modelIdentifier);
 			}
 
 
