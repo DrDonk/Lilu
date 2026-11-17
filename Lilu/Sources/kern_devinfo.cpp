@@ -556,6 +556,8 @@ void BaseDeviceInfo::updateModelInfo() {
 			// - "REV" key before it is deleted by VirtualSMC (only if we decided to update DataHub)
 		}
 
+        SYSLOG("oc4vm", "retrieve model and board-id from /efi/platform");
+        DBGLOG("oc4vm", "retrieve model and board-id from /efi/platform");
 		auto data = OSDynamicCast(OSData, entry->getProperty("Model"));
 		size_t dataSize = data ? data->getLength() : 0;
 		if (dataSize > 0) {
@@ -590,6 +592,8 @@ void BaseDeviceInfo::updateModelInfo() {
 	// If a value cannot be found, fall back to a default VMware model and board-id.
 	// Setting them also terminates the retry loop.
 	while (modelIdentifier[0] == '\0' || boardIdentifier[0] == '\0') {
+	    SYSLOG("oc4vm", "legacy approach for old MacEFI and VMware");
+		DBGLOG("oc4vm", "legacy approach for old MacEFI and VMware");
 		auto entry = IORegistryEntry::fromPath("/", gIODTPlane);
 		if (entry) {
 			bool modelReady = false;
