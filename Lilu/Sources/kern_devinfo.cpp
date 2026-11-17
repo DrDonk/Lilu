@@ -569,22 +569,26 @@ void BaseDeviceInfo::updateModelInfo() {
 		}
 
 		if (modelIdentifier[0] != '\0')
-			SYSLOG("dev", "got %s model from /efi/platform", modelIdentifier);
-		else
-			SYSLOG("dev", "failed to get valid model from /efi/platform");
+			SYSLOG("oc4vm", "got %s model from /efi/platform", modelIdentifier);
+		else {
+			SYSLOG("oc4vm", "failed to obtain model information from /efi/platform, using VMware default VMware20,1");
+			lilu_strlcpy(modelIdentifier, "VMware20,1", sizeof(modelIdentifier));
+		}
 
 		data = OSDynamicCast(OSData, entry->getProperty("board-id"));
 		if (data && data->getLength() > 0)
 			lilu_strlcpy(boardIdentifier, static_cast<const char *>(data->getBytesNoCopy()), sizeof(boardIdentifier));
 
 		if (boardIdentifier[0] != '\0')
-			SYSLOG("dev", "got %s board-id from /efi/platform", boardIdentifier);
-		else
-			SYSLOG("dev", "failed to get valid board-id from /efi/platform");
+			SYSLOG("oc4vm", "got %s board-id from /efi/platform", boardIdentifier);
+		else {
+			SYSLOG("oc4vm", "failed to obtain board-id information from /efi/platform, using VMware default VMM-X86_64");
+			lilu_strlcpy(boardIdentifier, "VMM-X86_64", sizeof(boardIdentifier));
+		}
 
 		entry->release();
 	} else {
-		SYSLOG("dev", "failed to get DT /efi/platform");
+		SYSLOG("oc4vm", "failed to get DT /efi/platform");
 	}
 
 	// Try the legacy approach for old MacEFI and VMware.
@@ -602,7 +606,7 @@ void BaseDeviceInfo::updateModelInfo() {
 					lilu_strlcpy(boardIdentifier, static_cast<const char *>(data->getBytesNoCopy()), sizeof(boardIdentifier));
 
 				if (boardIdentifier[0] != '\0') {
-					SYSLOG("dev", "got %s board-id from /", boardIdentifier);
+					SYSLOG("oc4vm", "got %s board-id from /", boardIdentifier);
 					// Otherwise we will get ACPI model.
 					modelReady = true;
 				} else {
@@ -611,7 +615,7 @@ void BaseDeviceInfo::updateModelInfo() {
 					// Without a real board-id the model in / is the ACPI one, so do not read it.
 					// Default the model as well, unless /efi/platform already gave us one.
 					if (modelIdentifier[0] == '\0') {
-						SYSOG("oc4vm", "using VMware default model VMware20,1");
+						SYSLOG("oc4vm", "using VMware default model VMware20,1");
 						lilu_strlcpy(modelIdentifier, "VMware20,1", sizeof(modelIdentifier));
 					}
 				}
@@ -643,7 +647,7 @@ void BaseDeviceInfo::updateModelInfo() {
 
 		// Only reachable if a default could not be applied; keep the original retry behaviour.
 		if (modelIdentifier[0] == '\0' || boardIdentifier[0] == '\0') {
-			SYSLOG("dev", "failed to obtain model information, retrying...");
+			SYSLOG("oc4vm", "failed to obtain model information, retrying...");
 			IOSleep(1);
 		}
 	}
