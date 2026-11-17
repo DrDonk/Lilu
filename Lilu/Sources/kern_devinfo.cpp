@@ -549,7 +549,7 @@ void BaseDeviceInfo::updateModelInfo() {
 			SYSLOG("dev", "WARN: found Clover bootloader");
 		} else if (entry->getProperty("REV")) {
 			bootloaderVendor = BootloaderVendor::Acidanthera;
-			DBGLOG("dev", "assuming Acidanthera bootloader");
+			SYSLOG("dev", "assuming Acidanthera bootloader");
 			// Note, OpenCore is mostly stealth. One can detect it via:
 			// - Acidanthera manufacturer (only if we decided to update SMBIOS, available much later).
 			// - opencore-version variable (only if we decided to expose it NVRAM)
@@ -557,7 +557,6 @@ void BaseDeviceInfo::updateModelInfo() {
 		}
 
         SYSLOG("oc4vm", "retrieve model and board-id from /efi/platform");
-        DBGLOG("oc4vm", "retrieve model and board-id from /efi/platform");
 		auto data = OSDynamicCast(OSData, entry->getProperty("Model"));
 		size_t dataSize = data ? data->getLength() : 0;
 		if (dataSize > 0) {
@@ -570,18 +569,18 @@ void BaseDeviceInfo::updateModelInfo() {
 		}
 
 		if (modelIdentifier[0] != '\0')
-			DBGLOG("dev", "got %s model from /efi/platform", modelIdentifier);
+			SYSLOG("dev", "got %s model from /efi/platform", modelIdentifier);
 		else
-			DBGLOG("dev", "failed to get valid model from /efi/platform");
+			SYSLOG("dev", "failed to get valid model from /efi/platform");
 
 		data = OSDynamicCast(OSData, entry->getProperty("board-id"));
 		if (data && data->getLength() > 0)
 			lilu_strlcpy(boardIdentifier, static_cast<const char *>(data->getBytesNoCopy()), sizeof(boardIdentifier));
 
 		if (boardIdentifier[0] != '\0')
-			DBGLOG("dev", "got %s board-id from /efi/platform", boardIdentifier);
+			SYSLOG("dev", "got %s board-id from /efi/platform", boardIdentifier);
 		else
-			DBGLOG("dev", "failed to get valid board-id from /efi/platform");
+			SYSLOG("dev", "failed to get valid board-id from /efi/platform");
 
 		entry->release();
 	} else {
@@ -593,7 +592,6 @@ void BaseDeviceInfo::updateModelInfo() {
 	// Setting them also terminates the retry loop.
 	while (modelIdentifier[0] == '\0' || boardIdentifier[0] == '\0') {
 	    SYSLOG("oc4vm", "legacy approach for old MacEFI and VMware");
-		DBGLOG("oc4vm", "legacy approach for old MacEFI and VMware");
 		auto entry = IORegistryEntry::fromPath("/", gIODTPlane);
 		if (entry) {
 			bool modelReady = false;
@@ -604,17 +602,16 @@ void BaseDeviceInfo::updateModelInfo() {
 					lilu_strlcpy(boardIdentifier, static_cast<const char *>(data->getBytesNoCopy()), sizeof(boardIdentifier));
 
 				if (boardIdentifier[0] != '\0') {
-					DBGLOG("dev", "got %s board-id from /", boardIdentifier);
+					SYSLOG("dev", "got %s board-id from /", boardIdentifier);
 					// Otherwise we will get ACPI model.
 					modelReady = true;
 				} else {
-					DBGLOG("dev", "failed to get valid board-id from /");
-					SYSLOG("dev", "failed to obtain board-id information, using VMware default VMM-X86_64");
+					SYSLOG("oc4vm", "failed to obtain board-id information, using VMware default VMM-X86_64");
 					lilu_strlcpy(boardIdentifier, "VMM-X86_64", sizeof(boardIdentifier));
 					// Without a real board-id the model in / is the ACPI one, so do not read it.
 					// Default the model as well, unless /efi/platform already gave us one.
 					if (modelIdentifier[0] == '\0') {
-						DBGLOG("dev", "using VMware default model VMware20,1");
+						SYSOG("oc4vm", "using VMware default model VMware20,1");
 						lilu_strlcpy(modelIdentifier, "VMware20,1", sizeof(modelIdentifier));
 					}
 				}
@@ -628,17 +625,16 @@ void BaseDeviceInfo::updateModelInfo() {
 					lilu_strlcpy(modelIdentifier, static_cast<const char *>(data->getBytesNoCopy()), sizeof(modelIdentifier));
 
 				if (modelIdentifier[0] != '\0') {
-					DBGLOG("dev", "got %s model from /", modelIdentifier);
+					SYSLOG("oc4vm", "got %s model from /", modelIdentifier);
 				} else {
-					DBGLOG("dev", "failed to get valid model from /");
-					DBGLOG("dev", "failed to obtain model information, using VMware default VMware20,1");
+					SYSLOG("oc4vm", "failed to obtain model information, using VMware default VMware20,1");
 					lilu_strlcpy(modelIdentifier, "VMware20,1", sizeof(modelIdentifier));
 				}
 			}
 
 			entry->release();
 		} else {
-			DBGLOG("dev", "failed to get DT root, using VMware defaults");
+			SYSLOG("oc4vm", "failed to get DT root, using VMware defaults");
 			if (boardIdentifier[0] == '\0')
 				lilu_strlcpy(boardIdentifier, "VMM-X86_64", sizeof(boardIdentifier));
 			if (modelIdentifier[0] == '\0')
