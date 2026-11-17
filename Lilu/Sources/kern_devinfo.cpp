@@ -571,8 +571,7 @@ void BaseDeviceInfo::updateModelInfo() {
 		if (modelIdentifier[0] != '\0')
 			SYSLOG("oc4vm", "got %s model from /efi/platform", modelIdentifier);
 		else {
-			SYSLOG("oc4vm", "failed to obtain model information from /efi/platform, using VMware default VMware20,1");
-			lilu_strlcpy(modelIdentifier, "VMware20,1", sizeof(modelIdentifier));
+			SYSLOG("oc4vm", "failed to obtain model information from /efi/platform");
 		}
 
 		data = OSDynamicCast(OSData, entry->getProperty("board-id"));
@@ -582,8 +581,7 @@ void BaseDeviceInfo::updateModelInfo() {
 		if (boardIdentifier[0] != '\0')
 			SYSLOG("oc4vm", "got %s board-id from /efi/platform", boardIdentifier);
 		else {
-			SYSLOG("oc4vm", "failed to obtain board-id information from /efi/platform, using VMware default VMM-X86_64");
-			lilu_strlcpy(boardIdentifier, "VMM-X86_64", sizeof(boardIdentifier));
+			SYSLOG("oc4vm", "failed to obtain board-id information from /efi/platform");
 		}
 
 		entry->release();
