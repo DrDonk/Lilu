@@ -541,113 +541,89 @@ void BaseDeviceInfo::updateFirmwareVendor() {
 	}
 }
 
+/**
+ * Detect VMware via the hypervisor "backdoor" I/O port.
+ * Sends the GETVERSION command (10) to port 0x5658 with the magic value 0x564D5868 ("VMXh")
+ * in EAX. On VMware EBX is returned containing the magic value. On any other platform
+ * the port read does not touch EBX, which we preset to zero.
+ */
+static bool isVMwareBackdoorPresent() {
+	constexpr uint32_t vmwareMagic = 0x564D5868;
+	constexpr uint32_t vmwarePort = 0x5658;
+	constexpr uint32_t vmwareCmdGetVersion = 10;
+
+	uint32_t eax = vmwareMagic;
+	uint32_t ebx = 0;
+	uint32_t ecx = vmwareCmdGetVersion;
+	uint32_t edx = vmwarePort;
+
+	__asm__ volatile ("inl %%dx, %%eax" : "+a"(eax), "+b"(ebx), "+c"(ecx), "+d"(edx) : : "memory");
+
+	return ebx == vmwareMagic;
+}
+
+/**
+ * Detect VMware via the hypervisor CPUID leaf.
+ * Checks the hypervisor-present bit (leaf 1, ECX bit 31) and then the hypervisor vendor
+ * signature in leaf 0x40000000, which is "VMwareVMware" in EBX, ECX and EDX.
+ * Note the signature can be masked in the VMX file (hypervisor.cpuid.v0 = "FALSE").
+ */
+static bool isVMwareCpuidPresent() {
+	uint32_t eax = 1, ebx = 0, ecx = 0, edx = 0;
+	__asm__ volatile ("cpuid" : "+a"(eax), "=b"(ebx), "+c"(ecx), "=d"(edx));
+	if ((ecx & (1U << 31)) == 0)
+		return false;
+
+	eax = 0x40000000; ebx = 0; ecx = 0; edx = 0;
+	__asm__ volatile ("cpuid" : "+a"(eax), "=b"(ebx), "+c"(ecx), "=d"(edx));
+
+	// "VMwa", "reVM", "ware" as little endian 32-bit values.
+	return ebx == 0x61774D56 && ecx == 0x4D566572 && edx == 0x65726177;
+}
+
 void BaseDeviceInfo::updateModelInfo() {
-	auto entry = IORegistryEntry::fromPath("/efi/platform", gIODTPlane);
+	// This code is only valid for VMware guests, so refuse to run anywhere else.
+	// Either the backdoor port or the hypervisor CPUID signature is enough, as each of
+	// them can be disabled in the VMX file. Only panic if both checks fail.
+	bool vmwareBackdoor = isVMwareBackdoorPresent();
+	bool vmwareCpuid = isVMwareCpuidPresent();
+	if (!vmwareBackdoor && !vmwareCpuid)
+		PANIC("oc4vm", "not running on VMware (no backdoor and no CPUID signature), this build of Lilu supports VMware guests only");
+	SYSLOG("oc4vm", "VMware detected (backdoor %s, CPUID %s)", vmwareBackdoor ? "yes" : "no", vmwareCpuid ? "yes" : "no");
+
+	// @DrDonk: This is a special case for VMware only guests
+	// VMware patches the IODeviceTree root node so read from that node.
+	// If a value cannot be found, fall back to a default VMware model and board-id.
+	SYSLOG("oc4vm", "Getting the DT root node");
+	auto entry = IORegistryEntry::fromPath("/", gIODTPlane);
 	if (entry) {
-		if (entry->getProperty("BEMB")) {
-			bootloaderVendor = BootloaderVendor::Clover;
-			SYSLOG("dev", "WARN: found Clover bootloader");
-		} else if (entry->getProperty("REV")) {
-			bootloaderVendor = BootloaderVendor::Acidanthera;
-			SYSLOG("dev", "assuming Acidanthera bootloader");
-			// Note, OpenCore is mostly stealth. One can detect it via:
-			// - Acidanthera manufacturer (only if we decided to update SMBIOS, available much later).
-			// - opencore-version variable (only if we decided to expose it NVRAM)
-			// - "REV" key before it is deleted by VirtualSMC (only if we decided to update DataHub)
-		}
-
-        SYSLOG("oc4vm", "retrieve model and board-id from /efi/platform");
-		auto data = OSDynamicCast(OSData, entry->getProperty("Model"));
-		size_t dataSize = data ? data->getLength() : 0;
-		if (dataSize > 0) {
-			auto bytes = static_cast<const char16_t *>(data->getBytesNoCopy());
-			size_t i = 0;
-			while (bytes[i] != '\0' && i < sizeof(modelIdentifier) - 1 && i < dataSize) {
-				modelIdentifier[i] = static_cast<char>(bytes[i]);
-				i++;
-			}
-		}
-
-		if (modelIdentifier[0] != '\0')
-			SYSLOG("oc4vm", "got %s model from /efi/platform", modelIdentifier);
-		else {
-			SYSLOG("oc4vm", "failed to obtain model information from /efi/platform");
-		}
-
-		data = OSDynamicCast(OSData, entry->getProperty("board-id"));
+		auto data = OSDynamicCast(OSData, entry->getProperty("board-id"));
 		if (data && data->getLength() > 0)
 			lilu_strlcpy(boardIdentifier, static_cast<const char *>(data->getBytesNoCopy()), sizeof(boardIdentifier));
 
-		if (boardIdentifier[0] != '\0')
-			SYSLOG("oc4vm", "got %s board-id from /efi/platform", boardIdentifier);
-		else {
-			SYSLOG("oc4vm", "failed to obtain board-id information from /efi/platform");
+		if (boardIdentifier[0] != '\0') {
+			SYSLOG("oc4vm", "got %s board-id from /", boardIdentifier);
+		} else {
+			SYSLOG("oc4vm", "failed to obtain board-id information, using VMware default VMM-X86_64");
+			lilu_strlcpy(boardIdentifier, "VMM-X86_64", sizeof(boardIdentifier));
+		}
+
+		data = OSDynamicCast(OSData, entry->getProperty("model"));
+		if (data && data->getLength() > 0)
+			lilu_strlcpy(modelIdentifier, static_cast<const char *>(data->getBytesNoCopy()), sizeof(modelIdentifier));
+
+		if (modelIdentifier[0] != '\0') {
+			SYSLOG("oc4vm", "got %s model from /", modelIdentifier);
+		} else {
+			SYSLOG("oc4vm", "failed to obtain model information, using VMware default VMware20,1");
+			lilu_strlcpy(modelIdentifier, "VMware20,1", sizeof(modelIdentifier));
 		}
 
 		entry->release();
 	} else {
-		SYSLOG("oc4vm", "failed to get DT /efi/platform");
-	}
-
-	// Try the legacy approach for old MacEFI and VMware.
-	// If a value cannot be found, fall back to a default VMware model and board-id.
-	// Setting them also terminates the retry loop.
-	while (modelIdentifier[0] == '\0' || boardIdentifier[0] == '\0') {
-	    SYSLOG("oc4vm", "legacy approach for old MacEFI and VMware");
-		auto entry = IORegistryEntry::fromPath("/", gIODTPlane);
-		if (entry) {
-			bool modelReady = false;
-
-			if (boardIdentifier[0] == '\0') {
-				auto data = OSDynamicCast(OSData, entry->getProperty("board-id"));
-				if (data && data->getLength() > 0)
-					lilu_strlcpy(boardIdentifier, static_cast<const char *>(data->getBytesNoCopy()), sizeof(boardIdentifier));
-
-				if (boardIdentifier[0] != '\0') {
-					SYSLOG("oc4vm", "got %s board-id from /", boardIdentifier);
-					// Otherwise we will get ACPI model.
-					modelReady = true;
-				} else {
-					SYSLOG("oc4vm", "failed to obtain board-id information, using VMware default VMM-X86_64");
-					lilu_strlcpy(boardIdentifier, "VMM-X86_64", sizeof(boardIdentifier));
-					// Without a real board-id the model in / is the ACPI one, so do not read it.
-					// Default the model as well, unless /efi/platform already gave us one.
-					if (modelIdentifier[0] == '\0') {
-						SYSLOG("oc4vm", "using VMware default model VMware20,1");
-						lilu_strlcpy(modelIdentifier, "VMware20,1", sizeof(modelIdentifier));
-					}
-				}
-			} else {
-				modelReady = true;
-			}
-
-			if (modelReady && modelIdentifier[0] == '\0') {
-				auto data = OSDynamicCast(OSData, entry->getProperty("model"));
-				if (data && data->getLength() > 0)
-					lilu_strlcpy(modelIdentifier, static_cast<const char *>(data->getBytesNoCopy()), sizeof(modelIdentifier));
-
-				if (modelIdentifier[0] != '\0') {
-					SYSLOG("oc4vm", "got %s model from /", modelIdentifier);
-				} else {
-					SYSLOG("oc4vm", "failed to obtain model information, using VMware default VMware20,1");
-					lilu_strlcpy(modelIdentifier, "VMware20,1", sizeof(modelIdentifier));
-				}
-			}
-
-			entry->release();
-		} else {
-			SYSLOG("oc4vm", "failed to get DT root, using VMware defaults");
-			if (boardIdentifier[0] == '\0')
-				lilu_strlcpy(boardIdentifier, "VMM-X86_64", sizeof(boardIdentifier));
-			if (modelIdentifier[0] == '\0')
-				lilu_strlcpy(modelIdentifier, "VMware20,1", sizeof(modelIdentifier));
-		}
-
-		// Only reachable if a default could not be applied; keep the original retry behaviour.
-		if (modelIdentifier[0] == '\0' || boardIdentifier[0] == '\0') {
-			SYSLOG("oc4vm", "failed to obtain model information, retrying...");
-			IOSleep(1);
-		}
+		SYSLOG("oc4vm", "failed to get DT root, using VMware defaults");
+		lilu_strlcpy(boardIdentifier, "VMM-X86_64", sizeof(boardIdentifier));
+		lilu_strlcpy(modelIdentifier, "VMware20,1", sizeof(modelIdentifier));
 	}
 
 	if (strstr(modelIdentifier, "Book", strlen("Book")))
