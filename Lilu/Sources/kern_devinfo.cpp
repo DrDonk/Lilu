@@ -582,48 +582,141 @@ static bool isVMwareCpuidPresent() {
 }
 
 void BaseDeviceInfo::updateModelInfo() {
-	// This code is only valid for VMware guests, so refuse to run anywhere else.
+	// VMware guests: VMware patches the IODeviceTree root node, so read from that node.
 	// Either the backdoor port or the hypervisor CPUID signature is enough, as each of
-	// them can be disabled in the VMX file. Only panic if both checks fail.
+	// them can be disabled in the VMX file.
 	bool vmwareBackdoor = isVMwareBackdoorPresent();
 	bool vmwareCpuid = isVMwareCpuidPresent();
-	if (!vmwareBackdoor && !vmwareCpuid)
-		PANIC("oc4vm", "not running on VMware (no backdoor and no CPUID signature), this build of Lilu supports VMware guests only");
-	SYSLOG("oc4vm", "VMware detected (backdoor %s, CPUID %s)", vmwareBackdoor ? "yes" : "no", vmwareCpuid ? "yes" : "no");
+	if (vmwareBackdoor || vmwareCpuid) {
+		SYSLOG("oc4vm", "VMware detected (backdoor %s, CPUID %s)", vmwareBackdoor ? "yes" : "no", vmwareCpuid ? "yes" : "no");
+		// If a value cannot be found, fall back to a default VMware model and board-id.
+		SYSLOG("oc4vm", "Getting the DT root node");
+		auto vmEntry = IORegistryEntry::fromPath("/", gIODTPlane);
+		if (vmEntry) {
+			auto vmData = OSDynamicCast(OSData, vmEntry->getProperty("board-id"));
+			if (vmData && vmData->getLength() > 0)
+				lilu_strlcpy(boardIdentifier, static_cast<const char *>(vmData->getBytesNoCopy()), sizeof(boardIdentifier));
 
-	// @DrDonk: This is a special case for VMware only guests
-	// VMware patches the IODeviceTree root node so read from that node.
-	// If a value cannot be found, fall back to a default VMware model and board-id.
-	SYSLOG("oc4vm", "Getting the DT root node");
-	auto entry = IORegistryEntry::fromPath("/", gIODTPlane);
-	if (entry) {
-		auto data = OSDynamicCast(OSData, entry->getProperty("board-id"));
-		if (data && data->getLength() > 0)
-			lilu_strlcpy(boardIdentifier, static_cast<const char *>(data->getBytesNoCopy()), sizeof(boardIdentifier));
+			if (boardIdentifier[0] != '\0') {
+				SYSLOG("oc4vm", "got %s board-id from /", boardIdentifier);
+			} else {
+				SYSLOG("oc4vm", "failed to obtain board-id information, using VMware default VMM-X86_64");
+				lilu_strlcpy(boardIdentifier, "VMM-X86_64", sizeof(boardIdentifier));
+			}
 
-		if (boardIdentifier[0] != '\0') {
-			SYSLOG("oc4vm", "got %s board-id from /", boardIdentifier);
+			vmData = OSDynamicCast(OSData, vmEntry->getProperty("model"));
+			if (vmData && vmData->getLength() > 0)
+				lilu_strlcpy(modelIdentifier, static_cast<const char *>(vmData->getBytesNoCopy()), sizeof(modelIdentifier));
+
+			if (modelIdentifier[0] != '\0') {
+				SYSLOG("oc4vm", "got %s model from /", modelIdentifier);
+			} else {
+				SYSLOG("oc4vm", "failed to obtain model information, using VMware default VMware20,1");
+				lilu_strlcpy(modelIdentifier, "VMware20,1", sizeof(modelIdentifier));
+			}
+
+			vmEntry->release();
 		} else {
-			SYSLOG("oc4vm", "failed to obtain board-id information, using VMware default VMM-X86_64");
+			SYSLOG("oc4vm", "failed to get DT root, using VMware defaults");
 			lilu_strlcpy(boardIdentifier, "VMM-X86_64", sizeof(boardIdentifier));
-		}
-
-		data = OSDynamicCast(OSData, entry->getProperty("model"));
-		if (data && data->getLength() > 0)
-			lilu_strlcpy(modelIdentifier, static_cast<const char *>(data->getBytesNoCopy()), sizeof(modelIdentifier));
-
-		if (modelIdentifier[0] != '\0') {
-			SYSLOG("oc4vm", "got %s model from /", modelIdentifier);
-		} else {
-			SYSLOG("oc4vm", "failed to obtain model information, using VMware default VMware20,1");
 			lilu_strlcpy(modelIdentifier, "VMware20,1", sizeof(modelIdentifier));
 		}
 
+		if (strstr(modelIdentifier, "Book", strlen("Book")))
+			modelType = WIOKit::ComputerModel::ComputerLaptop;
+		else
+			modelType = WIOKit::ComputerModel::ComputerDesktop;
+		return;
+	}
+
+	// Not VMware: run the original upstream logic below.
+	auto entry = IORegistryEntry::fromPath("/efi/platform", gIODTPlane);
+	if (entry) {
+		if (entry->getProperty("BEMB")) {
+			bootloaderVendor = BootloaderVendor::Clover;
+			SYSLOG("dev", "WARN: found Clover bootloader");
+		} else if (entry->getProperty("REV")) {
+			bootloaderVendor = BootloaderVendor::Acidanthera;
+			DBGLOG("dev", "assuming Acidanthera bootloader");
+			// Note, OpenCore is mostly stealth. One can detect it via:
+			// - Acidanthera manufacturer (only if we decided to update SMBIOS, available much later).
+			// - opencore-version variable (only if we decided to expose it NVRAM)
+			// - "REV" key before it is deleted by VirtualSMC (only if we decided to update DataHub)
+		}
+
+		auto data = OSDynamicCast(OSData, entry->getProperty("Model"));
+		size_t dataSize = data ? data->getLength() : 0;
+		if (dataSize > 0) {
+			auto bytes = static_cast<const char16_t *>(data->getBytesNoCopy());
+			size_t i = 0;
+			while (bytes[i] != '\0' && i < sizeof(modelIdentifier) - 1 && i < dataSize) {
+				modelIdentifier[i] = static_cast<char>(bytes[i]);
+				i++;
+			}
+		}
+
+		if (modelIdentifier[0] != '\0')
+			DBGLOG("dev", "got %s model from /efi/platform", modelIdentifier);
+		else
+			DBGLOG("dev", "failed to get valid model from /efi/platform");
+
+		data = OSDynamicCast(OSData, entry->getProperty("board-id"));
+		if (data && data->getLength() > 0)
+			lilu_strlcpy(boardIdentifier, static_cast<const char *>(data->getBytesNoCopy()), sizeof(boardIdentifier));
+
+		if (boardIdentifier[0] != '\0')
+			DBGLOG("dev", "got %s board-id from /efi/platform", boardIdentifier);
+		else
+			DBGLOG("dev", "failed to get valid board-id from /efi/platform");
+
 		entry->release();
 	} else {
-		SYSLOG("oc4vm", "failed to get DT root, using VMware defaults");
-		lilu_strlcpy(boardIdentifier, "VMM-X86_64", sizeof(boardIdentifier));
-		lilu_strlcpy(modelIdentifier, "VMware20,1", sizeof(modelIdentifier));
+		SYSLOG("dev", "failed to get DT /efi/platform");
+	}
+
+	// Try the legacy approach for old MacEFI and VMware.
+	while (modelIdentifier[0] == '\0' || boardIdentifier[0] == '\0') {
+		auto entry = IORegistryEntry::fromPath("/", gIODTPlane);
+		if (entry) {
+			bool modelReady = false;
+
+			if (boardIdentifier[0] == '\0') {
+				auto data = OSDynamicCast(OSData, entry->getProperty("board-id"));
+				if (data && data->getLength() > 0)
+					lilu_strlcpy(boardIdentifier, static_cast<const char *>(data->getBytesNoCopy()), sizeof(boardIdentifier));
+
+				if (boardIdentifier[0] != '\0') {
+					DBGLOG("dev", "got %s board-id from /", boardIdentifier);
+					// Otherwise we will get ACPI model.
+					modelReady = true;
+				} else {
+					DBGLOG("dev", "failed to get valid board-id from /");
+				}
+			} else {
+				modelReady = true;
+			}
+
+			if (modelReady && modelIdentifier[0] == '\0') {
+				auto data = OSDynamicCast(OSData, entry->getProperty("model"));
+				if (data && data->getLength() > 0)
+					lilu_strlcpy(modelIdentifier, static_cast<const char *>(data->getBytesNoCopy()), sizeof(modelIdentifier));
+
+				if (modelIdentifier[0] != '\0')
+					DBGLOG("dev", "got %s model from /", modelIdentifier);
+				else
+					DBGLOG("dev", "failed to get valid model from /");
+			}
+
+
+
+			entry->release();
+		} else {
+			SYSLOG("dev", "failed to get DT root");
+		}
+
+		if (modelIdentifier[0] == '\0' || boardIdentifier[0] == '\0') {
+			PANIC("dev", "failed to obtain model information from the device tree, cannot continue");
+		}
 	}
 
 	if (strstr(modelIdentifier, "Book", strlen("Book")))
