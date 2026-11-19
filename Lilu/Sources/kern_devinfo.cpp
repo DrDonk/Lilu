@@ -674,8 +674,8 @@ void BaseDeviceInfo::updateModelInfo() {
 		SYSLOG("dev", "failed to get DT /efi/platform");
 	}
 
-	// Try the legacy approach for old MacEFI and VMware.
-	while (modelIdentifier[0] == '\0' || boardIdentifier[0] == '\0') {
+	// Try the legacy approach for old MacEFI.
+	if (modelIdentifier[0] == '\0' || boardIdentifier[0] == '\0') {
 		auto entry = IORegistryEntry::fromPath("/", gIODTPlane);
 		if (entry) {
 			bool modelReady = false;
@@ -714,9 +714,8 @@ void BaseDeviceInfo::updateModelInfo() {
 			SYSLOG("dev", "failed to get DT root");
 		}
 
-		if (modelIdentifier[0] == '\0' || boardIdentifier[0] == '\0') {
+		if (modelIdentifier[0] == '\0' || boardIdentifier[0] == '\0')
 			PANIC("dev", "failed to obtain model information from the device tree, cannot continue");
-		}
 	}
 
 	if (strstr(modelIdentifier, "Book", strlen("Book")))
